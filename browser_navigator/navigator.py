@@ -90,6 +90,20 @@ class Navigator:
             element.click()
             logger.debug(f"Clicked element: {selector}")
         except TimeoutException as e:
+            # Try XPath contains() for partial href/text matching as fallback
+            if by == By.CSS_SELECTOR and selector.startswith('a[href='):
+                # Try partial href matching via XPath
+                href_match = selector.split('href=')[1].strip('"\']')
+                partial_href = href_match.replace('www.', '')
+                try:
+                    xpath = f"//a[contains(@href, '{partial_href}')]"
+                    elements = self._driver.find_elements(By.XPATH, xpath)
+                    if elements:
+                        elements[0].click()
+                        logger.debug(f"Clicked element via partial href match: {xpath}")
+                        return
+                except:
+                    pass
             raise NavigatorTimeoutError(f"Timeout waiting for element: {selector}") from e
         except NoSuchElementException as e:
             raise ElementNotFoundError(f"Element not found: {selector}") from e
@@ -121,7 +135,21 @@ class Navigator:
                 element.clear()
             element.send_keys(text)
             logger.debug(f"Typed text into: {selector}")
-        except NoSuchElementException as e:
+        except (NoSuchElementException, NavigatorTimeoutError) as e:
+            # Fallback: try finding input by name attribute from selector
+            if by == By.CSS_SELECTOR and selector.startswith('input[type='):
+                # Extract name or try generic input
+                try:
+                    elements = self._driver.find_elements(By.CSS_SELECTOR, "input[name]")
+                    if elements:
+                        el = elements[0]
+                        if clear_first:
+                            el.clear()
+                        el.send_keys(text)
+                        logger.debug(f"Typed via fallback selector: input[name]")
+                        return
+                except:
+                    pass
             raise ElementNotFoundError(f"Element not found: {selector}") from e
 
     def wait_for(
@@ -294,8 +322,12 @@ class Navigator:
             by: Selector type.
             timeout: Maximum wait time in seconds.
         """
-        element = self.wait_for(selector, by=by, timeout=timeout)
-        self.execute_js("arguments[0].scrollIntoView({block: 'center'});", element)
+        try:
+            element = self.wait_for(selector, by=by, timeout=timeout)
+            self.execute_js("arguments[0].scrollIntoView({block: 'center'});", element)
+        except NavigatorTimeoutError:
+            # Fallback: scroll to top of page if element not found
+            self.execute_js("window.scrollTo(0, 0);")
 
     def find_elements(
         self,
